@@ -3,59 +3,40 @@ package gotir
 import (
 	"debug/dwarf"
 	"debug/elf"
-	"fmt"
 	"io"
 )
 
-type go_type interface {
-	String() string
-}
-
-type struct_type struct {
-	name   string
-	size   int64
-	fields []struct_field
-}
-
-type struct_field struct {
-	name     string
-	typeName string
-	offset   int64
-}
-
-func (f *struct_field) String() string {
-	return fmt.Sprintf("%s %s %s\n", f.name, f.offset, f.typeName)
-}
-
-func (s *struct_type) String() string {
-	return s.name
-}
-
-type interface_type struct{}
-
-type go_function interface {
-	String() string
-}
-
-func ParseFromPath(path string) error {
+func ParseFromPath(path string) (*gotir, error) {
 	elfFile, err := elf.Open(path)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	data, err := elfFile.DWARF()
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	structs, err := parseStructs(data)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	fmt.Println(structs)
+	functions, err := parseFunctions(data)
+	if err != nil {
+		return nil, err
+	}
 
-	return nil
+	gotir := &gotir{
+		Functions: functions,
+		Structs:   structs,
+	}
+
+	return gotir, nil
+}
+
+func parseFunctions(data *dwarf.Data) ([]*function_type, error) {
+	return nil, nil
 }
 
 func parseStructs(data *dwarf.Data) ([]*struct_type, error) {
@@ -66,6 +47,7 @@ func parseStructs(data *dwarf.Data) ([]*struct_type, error) {
 	structs := []*struct_type{}
 	var currentlyReadingStruct *struct_type = nil
 
+entryReadLoop:
 	for {
 		entry, err := lineReader.Next()
 		if err == io.EOF || entry == nil {
@@ -74,7 +56,10 @@ func parseStructs(data *dwarf.Data) ([]*struct_type, error) {
 		if err != nil {
 			return nil, err
 		}
-		if entry == nil {
+		if entryIsNull(entry) {
+			if currentlyReadingStruct == nil {
+				continue entryReadLoop
+			}
 			structs = append(structs, currentlyReadingStruct)
 			currentlyReadingStruct = nil
 		}
@@ -87,18 +72,18 @@ func parseStructs(data *dwarf.Data) ([]*struct_type, error) {
 			for _, field := range entry.Field {
 
 				if field.Attr == dwarf.AttrName {
-					currentlyReadingStruct.name = field.Val.(string)
+					currentlyReadingStruct.Name = field.Val.(string)
 				}
 
 				if field.Attr == dwarf.AttrByteSize {
-					currentlyReadingStruct.size = field.Val.(int64)
+					currentlyReadingStruct.Size = field.Val.(int64)
 				}
 			}
 
-			currentlyReadingStruct.fields = []struct_field{}
+			currentlyReadingStruct.Fields = []struct_field{}
 		}
 
-		// If currently reading the fields of a struct
+		// If currently reading the Fields of a struct
 		if currentlyReadingStruct != nil {
 
 			// Found a member of the struct
@@ -109,11 +94,11 @@ func parseStructs(data *dwarf.Data) ([]*struct_type, error) {
 				for _, field := range entry.Field {
 
 					if field.Attr == dwarf.AttrName {
-						currentField.name = field.Val.(string)
+						currentField.Name = field.Val.(string)
 					}
 
 					if field.Attr == dwarf.AttrDataMemberLoc {
-						currentField.offset = field.Val.(int64)
+						currentField.Offset = field.Val.(int64)
 					}
 
 					if field.Attr == dwarf.AttrType {
@@ -126,15 +111,22 @@ func parseStructs(data *dwarf.Data) ([]*struct_type, error) {
 
 						for i := range typeEntry.Field {
 							if typeEntry.Field[i].Attr == dwarf.AttrName {
-								currentField.typeName = typeEntry.Field[i].Val.(string)
+								currentField.TypeName = typeEntry.Field[i].Val.(string)
 							}
 						}
 
 					}
 				}
-				currentlyReadingStruct.fields = append(currentlyReadingStruct.fields, currentField)
+				currentlyReadingStruct.Fields = append(currentlyReadingStruct.Fields, currentField)
 			}
 		}
 	}
 	return structs, nil
+}
+
+func entryIsNull(e *dwarf.Entry) bool {
+	return e.Children == false &&
+		len(e.Field) == 0 &&
+		e.Offset == 0 &&
+		e.Tag == dwarf.Tag(0)
 }
