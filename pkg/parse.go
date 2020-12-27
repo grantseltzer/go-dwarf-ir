@@ -6,7 +6,8 @@ import (
 	"io"
 )
 
-func ParseFromPath(path string) (*gotir, error) {
+// ParseFromPath reads in all of the type information from the DWARF section of the ELF at the given patho
+func ParseFromPath(path string) (*Gotir, error) {
 	elfFile, err := elf.Open(path)
 	if err != nil {
 		return nil, err
@@ -17,35 +18,26 @@ func ParseFromPath(path string) (*gotir, error) {
 		return nil, err
 	}
 
-	structs, err := parseStructs(data)
+	ir, err := parseFromData(data)
 	if err != nil {
 		return nil, err
 	}
 
-	functions, err := parseFunctions(data)
-	if err != nil {
-		return nil, err
-	}
-
-	gotir := &gotir{
-		Functions: functions,
-		Structs:   structs,
-	}
-
-	return gotir, nil
+	return ir, nil
 }
 
-func parseFunctions(data *dwarf.Data) ([]*function_type, error) {
-	return nil, nil
-}
-
-func parseStructs(data *dwarf.Data) ([]*struct_type, error) {
+func parseFromData(data *dwarf.Data) (*Gotir, error) {
 
 	lineReader := data.Reader()
 	typeReader := data.Reader()
 
-	structs := []*struct_type{}
+	ir := &Gotir{
+		Structs:   []*struct_type{},
+		Functions: []*function_type{},
+	}
+
 	var currentlyReadingStruct *struct_type = nil
+	var currentlyReadingFunction *function_type = nil
 
 entryReadLoop:
 	for {
@@ -57,71 +49,130 @@ entryReadLoop:
 			return nil, err
 		}
 		if entryIsNull(entry) {
-			if currentlyReadingStruct == nil {
-				continue entryReadLoop
+			if currentlyReadingStruct != nil {
+				ir.Structs = append(ir.Structs, currentlyReadingStruct)
+				currentlyReadingStruct = nil
 			}
-			structs = append(structs, currentlyReadingStruct)
-			currentlyReadingStruct = nil
+			if currentlyReadingFunction != nil {
+				ir.Functions = append(ir.Functions, currentlyReadingFunction)
+				currentlyReadingFunction = nil
+			}
+			continue entryReadLoop
 		}
 
 		// Found a struct
 		if entry.Tag == dwarf.TagStructType {
-
-			currentlyReadingStruct = &struct_type{}
-
-			for _, field := range entry.Field {
-
-				if field.Attr == dwarf.AttrName {
-					currentlyReadingStruct.Name = field.Val.(string)
-				}
-
-				if field.Attr == dwarf.AttrByteSize {
-					currentlyReadingStruct.Size = field.Val.(int64)
-				}
+			currentlyReadingStruct = readStructInit(entry)
+		}
+		// If currently reading the fields of a struct
+		if currentlyReadingStruct != nil {
+			err = readStructField(typeReader, entry, currentlyReadingStruct)
+			if err != nil {
+				return nil, err
 			}
-
-			currentlyReadingStruct.Fields = []struct_field{}
 		}
 
-		// If currently reading the Fields of a struct
-		if currentlyReadingStruct != nil {
-
-			// Found a member of the struct
-			if entry.Tag == dwarf.TagMember {
-
-				currentField := struct_field{}
-
-				for _, field := range entry.Field {
-
-					if field.Attr == dwarf.AttrName {
-						currentField.Name = field.Val.(string)
-					}
-
-					if field.Attr == dwarf.AttrDataMemberLoc {
-						currentField.Offset = field.Val.(int64)
-					}
-
-					if field.Attr == dwarf.AttrType {
-
-						typeReader.Seek(field.Val.(dwarf.Offset))
-						typeEntry, err := typeReader.Next()
-						if err != nil {
-							return nil, err
-						}
-
-						for i := range typeEntry.Field {
-							if typeEntry.Field[i].Attr == dwarf.AttrName {
-								currentField.TypeName = typeEntry.Field[i].Val.(string)
-							}
-						}
-
-					}
-				}
-				currentlyReadingStruct.Fields = append(currentlyReadingStruct.Fields, currentField)
+		// Found a function
+		if entry.Tag == dwarf.TagSubprogram {
+			currentlyReadingFunction = readFunctionInit(entry)
+		}
+		// If currently reading the parameters of a function
+		if currentlyReadingFunction != nil {
+			err = readFunctionParameter(typeReader, entry, currentlyReadingFunction)
+			if err != nil {
+				return nil, err
 			}
 		}
 	}
-	return structs, nil
+
+	return ir, nil
+}
+
+func readFunctionInit(entry *dwarf.Entry) *function_type {
+	currentlyReadingFunction := &function_type{}
+
+	for _, field := range entry.Field {
+		if field.Attr == dwarf.AttrName {
+			currentlyReadingFunction.Name = field.Val.(string)
+		}
+	}
+
+	currentlyReadingFunction.Params = []function_param{}
+	return currentlyReadingFunction
+}
+
+func readFunctionParameter(typeReader *dwarf.Reader, entry *dwarf.Entry, currentlyReadingFunction *function_type) error {
+
+	if entry.Tag != dwarf.TagFormalParameter {
+		return nil
+	}
+
+	newParam := function_param{}
+	for _, field := range entry.Field {
+		if field.Attr == dwarf.AttrName {
+			newParam.Name = field.Val.(string)
+		}
+
+		//TODO: get type, calculate size, staritng offset...
+	}
+
+	currentlyReadingFunction.Params = append(currentlyReadingFunction.Params, newParam)
+
+	return nil
+}
+
+func readStructInit(entry *dwarf.Entry) *struct_type {
+
+	currentlyReadingStruct := &struct_type{}
+
+	for _, field := range entry.Field {
+
+		if field.Attr == dwarf.AttrName {
+			currentlyReadingStruct.Name = field.Val.(string)
+		}
+
+		if field.Attr == dwarf.AttrByteSize {
+			currentlyReadingStruct.Size = field.Val.(int64)
+		}
+	}
+
+	currentlyReadingStruct.Fields = []struct_field{}
+	return currentlyReadingStruct
+}
+
+func readStructField(typeReader *dwarf.Reader, entry *dwarf.Entry, currentlyReadingStruct *struct_type) error {
+
+	if entry.Tag != dwarf.TagMember {
+		return nil
+	}
+
+	currentField := struct_field{}
+	for _, field := range entry.Field {
+
+		if field.Attr == dwarf.AttrName {
+			currentField.Name = field.Val.(string)
+		}
+
+		if field.Attr == dwarf.AttrDataMemberLoc {
+			currentField.Offset = field.Val.(int64)
+		}
+
+		if field.Attr == dwarf.AttrType {
+			typeReader.Seek(field.Val.(dwarf.Offset))
+			typeEntry, err := typeReader.Next()
+			if err != nil {
+				return err
+			}
+
+			for i := range typeEntry.Field {
+				if typeEntry.Field[i].Attr == dwarf.AttrName {
+					currentField.TypeName = typeEntry.Field[i].Val.(string)
+				}
+			}
+		}
+	}
+	currentlyReadingStruct.Fields = append(currentlyReadingStruct.Fields, currentField)
+	return nil
 }
 
 func entryIsNull(e *dwarf.Entry) bool {

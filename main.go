@@ -15,7 +15,7 @@ func main() {
 		log.Fatal(err)
 	}
 
-	b, err := json.Marshal(ir)
+	b, err := json.Marshal(ir.Functions)
 	if err != nil {
 		log.Fatal(err)
 	}
