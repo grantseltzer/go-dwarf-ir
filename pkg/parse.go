@@ -107,13 +107,33 @@ func readFunctionParameter(typeReader *dwarf.Reader, entry *dwarf.Entry, current
 		return nil
 	}
 
+	var (
+		typeEntry *dwarf.Entry
+		err       error
+	)
+
 	newParam := function_param{}
 	for _, field := range entry.Field {
 		if field.Attr == dwarf.AttrName {
 			newParam.Name = field.Val.(string)
 		}
 
-		//TODO: get type, calculate size, staritng offset...
+		// Get type of the parameter
+		if field.Attr == dwarf.AttrType {
+			typeReader.Seek(field.Val.(dwarf.Offset))
+			typeEntry, err = typeReader.Next()
+			if err != nil {
+				return err
+			}
+
+			for i := range typeEntry.Field {
+				if typeEntry.Field[i].Attr == dwarf.AttrName {
+					newParam.TypeName = typeEntry.Field[i].Val.(string)
+				}
+			}
+		}
+
+		//TODO: calculate size, staritng offset...
 	}
 
 	currentlyReadingFunction.Params = append(currentlyReadingFunction.Params, newParam)

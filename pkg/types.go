@@ -43,7 +43,8 @@ func (f *function_type) String() string {
 }
 
 type function_param struct {
-	Name string
+	Name     string
+	TypeName string
 }
 
 type interface_type struct{}
