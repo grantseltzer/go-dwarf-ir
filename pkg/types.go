@@ -45,6 +45,8 @@ func (f *function_type) String() string {
 type function_param struct {
 	Name     string
 	TypeName string
+	TypeSize int64
+	IsReturn bool
 }
 
 type interface_type struct{}

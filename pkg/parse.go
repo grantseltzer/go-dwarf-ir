@@ -42,7 +42,7 @@ func parseFromData(data *dwarf.Data) (*Gotir, error) {
 entryReadLoop:
 	for {
 		entry, err := lineReader.Next()
-		if err == io.EOF || entry == nil {
+		if err == io.EOF || entry == nil { //FIXME: Is `|| entry == nil` correct?
 			break
 		}
 		if err != nil {
@@ -77,7 +77,7 @@ entryReadLoop:
 			currentlyReadingFunction = readFunctionInit(entry)
 		}
 		// If currently reading the parameters of a function
-		if currentlyReadingFunction != nil {
+		if currentlyReadingFunction != nil && entry.Tag == dwarf.TagFormalParameter {
 			err = readFunctionParameter(typeReader, entry, currentlyReadingFunction)
 			if err != nil {
 				return nil, err
@@ -103,37 +103,36 @@ func readFunctionInit(entry *dwarf.Entry) *function_type {
 
 func readFunctionParameter(typeReader *dwarf.Reader, entry *dwarf.Entry, currentlyReadingFunction *function_type) error {
 
-	if entry.Tag != dwarf.TagFormalParameter {
-		return nil
-	}
-
 	var (
 		typeEntry *dwarf.Entry
 		err       error
 	)
 
-	newParam := function_param{}
+	newParam := function_param{Name: "_", TypeName: "_"}
 	for _, field := range entry.Field {
+
 		if field.Attr == dwarf.AttrName {
 			newParam.Name = field.Val.(string)
 		}
 
-		// Get type of the parameter
+		if field.Attr == dwarf.AttrVarParam {
+			newParam.IsReturn = true
+		}
+
+		// Get the name of the type of the parameter
+		// XXX: Have to go back later to get the size
 		if field.Attr == dwarf.AttrType {
 			typeReader.Seek(field.Val.(dwarf.Offset))
 			typeEntry, err = typeReader.Next()
 			if err != nil {
 				return err
 			}
-
 			for i := range typeEntry.Field {
 				if typeEntry.Field[i].Attr == dwarf.AttrName {
 					newParam.TypeName = typeEntry.Field[i].Val.(string)
 				}
 			}
 		}
-
-		//TODO: calculate size, staritng offset...
 	}
 
 	currentlyReadingFunction.Params = append(currentlyReadingFunction.Params, newParam)
